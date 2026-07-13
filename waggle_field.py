@@ -82,19 +82,30 @@ class FieldLink:
         return self._watch_id
 
     def trade_outcome(self, preset: str, market: str, *, filled: bool,
-                      pnl_pct: float = 0.0, reason: str = "") -> dict | None:
+                      pnl_pct: float = 0.0, reason: str = "",
+                      commission_usd: float = 0.0, decision_ms: float = 0.0) -> dict | None:
         """Filled/positive → gold on the strategy-parameter URI; rejected or
-        stopped out → dead-end. Intensity scales with |pnl|."""
+        stopped out → dead-end. Intensity scales with |pnl|.
+
+        commission_usd (fees + slippage) and decision_ms (wall-clock of the
+        decision path) attach as the deposit's cost, so cost-aware routing
+        (sniff optimize=cost_efficiency) can prefer strategies whose gold was
+        cheap to produce over ones whose equal-strength gold burned fees or
+        latency (round 2, #4). Confluence Forge's backtester already computes
+        commission/slippage — same numbers, this destination."""
         wid = self._watch()
         if not wid:
             return None
         win = filled and pnl_pct >= 0
-        return _http("POST", f"{WAGGLE}/v1/ingest/{wid}", {
+        event = {
             "resource": f"{preset}/{market}",
             "outcome": "success" if win else "failure",
             "intensity": min(10.0, 1.0 + abs(pnl_pct) / 5.0),
             "note": reason or f"pnl {pnl_pct:+.1f}%",
-            "meta": {"pnl_pct": f"{pnl_pct:.2f}", "market": market}})
+            "meta": {"pnl_pct": f"{pnl_pct:.2f}", "market": market}}
+        if commission_usd or decision_ms:
+            event["cost"] = {"dollars": commission_usd, "wall_clock_ms": decision_ms}
+        return _http("POST", f"{WAGGLE}/v1/ingest/{wid}", event)
 
     # ── oracle verdicts onto the bounded channel (§5.2) ──────────────────
 
