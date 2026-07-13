@@ -104,7 +104,14 @@ class FieldLink:
             "note": reason or f"pnl {pnl_pct:+.1f}%",
             "meta": {"pnl_pct": f"{pnl_pct:.2f}", "market": market}}
         if commission_usd or decision_ms:
-            event["cost"] = {"dollars": commission_usd, "wall_clock_ms": decision_ms}
+            # stamp provenance so a cost-efficiency spread is auditable to its
+            # instrumentation, not trusted blind: LOOM meters real fees+slippage
+            # (dollars) and decision wall-clock (ms), not token counts.
+            event["cost"] = {
+                "dollars": commission_usd, "wall_clock_ms": decision_ms,
+                "source": {"producer": "loom",
+                           "method": "commission+slippage+decision-latency",
+                           "units": "dollars+ms"}}
         return _http("POST", f"{WAGGLE}/v1/ingest/{wid}", event)
 
     # ── oracle verdicts onto the bounded channel (§5.2) ──────────────────
