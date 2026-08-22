@@ -24,7 +24,20 @@ import threading
 import os
 
 VANTAGE_URL = "http://2.25.70.156:8001"
-AGENT_KEY = os.environ.get("VANTAGE_AGENT_KEY", "loom-whale-tracker")
+def _load_key():
+    try:
+        key_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".vantage_key")
+        with open(key_file) as f:
+            return f.read().strip()
+    except Exception:
+        try:
+            with open(os.path.expanduser("~/.vantage_key")) as f:
+                return f.read().strip()
+        except Exception:
+            return os.environ.get("VANTAGE_AGENT_KEY", "loom-whale-tracker")
+
+
+AGENT_KEY = _load_key()
 
 
 class VantageWatchlist:

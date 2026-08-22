@@ -29,7 +29,21 @@ def ssh_json(cmd: str) -> dict:
 
 
 def pull_ares_signals():
-    raw = ssh_json("curl -s 'http://localhost:8001/api/intel/signals?limit=50' 2>/dev/null")
+    vantage_key = ""
+    try:
+        # Load key from file on VPS
+        key_result = subprocess.run(
+            SSH + ["cat /opt/ares/.vantage_key 2>/dev/null || echo ''"],
+            capture_output=True, text=True, timeout=5
+        )
+        vantage_key = key_result.stdout.strip()
+    except Exception:
+        pass
+
+    raw = ssh_json(
+        f"curl -s -H 'X-Agent-Key: {vantage_key}' "
+        f"'http://localhost:8001/api/intel/signals?limit=50' 2>/dev/null"
+    )
     signals = raw.get("signals", [])
     count = 0
     for s in signals:

@@ -11,7 +11,7 @@ import os
 import threading
 
 VANTAGE_URL = "http://2.25.70.156:8001"
-KEY_FILE = "/data/data/com.termux/files/home/loom/.vantage_key"
+KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".vantage_key")
 
 
 class VantageWalletSync:
@@ -27,7 +27,11 @@ class VantageWalletSync:
             with open(KEY_FILE) as f:
                 return f.read().strip()
         except Exception:
-            return ""
+            try:
+                with open(os.path.expanduser("~/.vantage_key")) as f:
+                    return f.read().strip()
+            except Exception:
+                return ""
 
     def _headers(self):
         return {
@@ -90,7 +94,7 @@ class VantageWalletSync:
                 new_count += 1
 
             # Enrich with on-chain data if Solana sources available
-            if solana_sources and solana_sources.connected:
+            if solana_sources:
                 try:
                     holders = solana_sources.get_token_holders(addr)
                     if holders:

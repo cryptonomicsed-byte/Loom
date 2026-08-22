@@ -82,6 +82,34 @@ class LiquidityFlowEngine:
             "dominant_flow": sorted_dests[0][0] if sorted_dests else None,
         }
 
+    def track_pool_liquidity(self, pair: str, dex: str, chain: str,
+                              liquidity_usd: float, volume_24h: float = 0,
+                              price_usd: float = 0):
+        """Track DEX pool liquidity directly. More precise than flow-based tracking."""
+        key = f"{pair}@{dex}@{chain}"
+        with self._lock:
+            self.pools[key] = liquidity_usd
+        # Also record as a flow for the river detection
+        if liquidity_usd > 0:
+            base = pair.split("/")[0] if "/" in pair else pair
+            self.track_flow(
+                source="dex_aggregator",
+                destination=base,
+                amount_sol=liquidity_usd / 1e6,  # Normalize USD to pseudo-SOL
+                wallet=dex,
+                flow_type="liquidity_pool",
+            )
+
+    def get_pool_liquidity(self, base_symbol: str = "") -> dict:
+        """Get pool liquidity for a symbol or all tracked pools."""
+        with self._lock:
+            if base_symbol:
+                return {
+                    k: v for k, v in self.pools.items()
+                    if base_symbol in k
+                }
+            return dict(self.pools)
+
 
 # ═══════════════════════════════════════════════════════════════
 # 2. CONTAGION MAP

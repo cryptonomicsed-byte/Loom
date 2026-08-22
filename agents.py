@@ -117,12 +117,21 @@ class TechnicalAgent:
             mag = e.get("magnitude", 0)
 
             # Map event types to technical conditions
-            if etype in ("price_surge", "crowd_arrive"):
+            if etype in ("price_surge", "crowd_arrive", "price_update"):
                 buy_signals += mag
-            elif etype in ("whale_exit", "distribution", "anomaly"):
-                sell_signals += mag
+            elif etype in ("whale_exit", "distribution", "anomaly", "threat_intel"):
+                sell_signals += mag * 1.2  # Threat intel is strongly bearish
             elif etype == "volume_spike":
                 buy_signals += mag * 0.5  # volume can go either way
+            elif etype == "debate":
+                # Debate signals carry direction metadata
+                direction = e.get("direction", "")
+                if direction == "BUY":
+                    buy_signals += mag * 0.7
+                elif direction == "SELL":
+                    sell_signals += mag * 0.7
+            elif etype == "onchain":
+                buy_signals += mag * 0.3  # On-chain activity generally positive
             total_signals += abs(mag)
 
         # Compute score
@@ -264,12 +273,16 @@ class AgentOrchestrator:
     """
     Runs all agents, computes weighted consensus, and surfaces dissent.
 
+    V2: Accepts external agent votes (from Vantage trading_agents debates)
+    for cross-platform consensus fusion.
+
     Decision logic:
       1. Each agent produces {direction, conviction, reasoning}
       2. If RiskAgent flags => hard veto (no entry regardless of others)
       3. Remaining agents vote weighted by conviction * agent_weight * track_record
-      4. If Whale and Technical disagree by >0.3 conviction => DEBATE flag
-      5. Consensus output includes the debate log for transparency
+      4. External votes (from Vantage) are incorporated with configurable weight
+      5. If Whale and Technical disagree by >0.3 conviction => DEBATE flag
+      6. Consensus output includes the debate log for transparency
     """
 
     def __init__(self, events_callback=None):
@@ -279,6 +292,31 @@ class AgentOrchestrator:
         self.agents = [self.whale, self.technical, self.risk]
         self._events_cb = events_callback
         self.decision_log: list = []
+        # External vote tracking
+        self.external_votes: dict = {}  # {symbol: [{agent, direction, conviction, source}]}
+        self.external_weight = 0.20  # How much external votes count vs internal
+
+    def add_external_vote(self, symbol: str, direction: str, conviction: float,
+                          agent_name: str = "vantage", source: str = "vantage_debate"):
+        """Accept an external agent's vote (from Vantage trading_agents debates)."""
+        if symbol not in self.external_votes:
+            self.external_votes[symbol] = []
+        self.external_votes[symbol].append({
+            "agent": agent_name,
+            "direction": direction,
+            "conviction": conviction,
+            "source": source,
+            "timestamp": time.time(),
+        })
+        # Cap at 10 external votes per symbol
+        if len(self.external_votes[symbol]) > 10:
+            self.external_votes[symbol] = self.external_votes[symbol][-10:]
+
+    def get_external_votes(self, symbol: str) -> list:
+        """Get recent external votes for a symbol (last 5 minutes)."""
+        now = time.time()
+        votes = self.external_votes.get(symbol, [])
+        return [v for v in votes if now - v["timestamp"] < 300]
 
     def get_events(self) -> list:
         if self._events_cb:
@@ -322,6 +360,18 @@ class AgentOrchestrator:
                 acc_bonus = (tr["correct"] / tr["total"] - 0.5) * 0.2
                 weights[i] += acc_bonus
 
+        # Incorporate external votes from Vantage
+        ext_votes = self.get_external_votes(symbol)
+        external_buy = 0.0
+        external_sell = 0.0
+        external_count = 0
+        for ev in ext_votes:
+            if ev["direction"] == "BUY":
+                external_buy += ev["conviction"]
+            elif ev["direction"] == "SELL":
+                external_sell += ev["conviction"]
+            external_count += 1
+
         # Compute weighted scores
         buy_score = 0.0
         sell_score = 0.0
@@ -333,6 +383,13 @@ class AgentOrchestrator:
             elif sig["direction"] == "SELL":
                 sell_score += sig["conviction"] * w
             total_weight += w
+
+        # Blend in external votes
+        if external_count > 0:
+            ext_buy_avg = external_buy / external_count
+            ext_sell_avg = external_sell / external_count
+            buy_score = buy_score * (1 - self.external_weight) + ext_buy_avg * self.external_weight
+            sell_score = sell_score * (1 - self.external_weight) + ext_sell_avg * self.external_weight
 
         # Normalize
         if total_weight > 0:
@@ -381,6 +438,7 @@ class AgentOrchestrator:
         """Build structured consensus output."""
 
         # Track record update placeholder (in production, update after trade closes)
+        ext_votes = self.get_external_votes(symbol)
         result = {
             "symbol": symbol,
             "timestamp": time.time(),
@@ -390,6 +448,8 @@ class AgentOrchestrator:
                 "technical": tech_sig,
                 "risk": risk_sig,
             },
+            "external_votes": ext_votes,
+            "external_vote_count": len(ext_votes),
             "consensus": {
                 "direction": final_direction,
                 "conviction": round(final_conviction, 3),
@@ -397,7 +457,8 @@ class AgentOrchestrator:
                 "veto_reason": veto_reason,
                 "debate": debate,
                 "debate_reason": debate_reason,
-                "source": "loom-multi-agent-v1",
+                "source": "loom-multi-agent-v2",
+                "cross_platform": len(ext_votes) > 0,
             },
         }
 

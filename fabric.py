@@ -290,7 +290,19 @@ class EventProcessor:
         conv = signal.get("conviction", 0)
         score = signal.get("score", conv)
         change = signal.get("change_6h", 0)
-        event_type = "price_surge" if change > 20 else ("agent_signal" if conv >= 4 else "volume_spike")
+        sig_type = signal.get("type", "")
+        if change > 20:
+            event_type = "price_surge"
+        elif sig_type == "threat_intel":
+            event_type = "threat_intel"
+        elif sig_type == "debate":
+            event_type = "debate"
+        elif sig_type == "onchain":
+            event_type = "onchain"
+        elif conv >= 4:
+            event_type = "agent_signal"
+        else:
+            event_type = "volume_spike"
 
         return MarketEvent(
             event_id=self._make_id(),
@@ -334,6 +346,41 @@ class EventProcessor:
                 "volume_24h": coin.get("total_volume"),
                 "change_24h": change,
                 "change_7d": coin.get("price_change_percentage_7d_in_currency"),
+            },
+        )
+
+    def from_pyth_price(self, token: dict) -> MarketEvent:
+        """Convert Pyth Network price data to MarketEvent.
+        Always emits — these are current price snapshots, not change-driven."""
+        symbol = token.get("symbol", "?").upper()
+        price = token.get("price", 0)
+        confidence = token.get("confidence", "0")
+
+        # Derive magnitude from confidence interval as fraction of price
+        try:
+            conf_val = float(confidence)
+            if price > 0:
+                magnitude = min(1.0, (conf_val / price) * 100)
+            else:
+                magnitude = 0.1
+        except (ValueError, TypeError):
+            magnitude = 0.15
+
+        return MarketEvent(
+            event_id=self._make_id(),
+            event_type="price_update",
+            entity=f"{symbol}/USD",
+            symbol=symbol,
+            magnitude=round(min(1.0, max(0.05, magnitude)), 3),
+            confidence=0.85,  # Pyth is institutional-grade data
+            timestamp=time.time(),
+            source="pyth_vantage",
+            temporal_tags=[],
+            metadata={
+                "price": price,
+                "confidence_interval": confidence,
+                "feed_type": "pyth",
+                "total_feeds_available": token.get("_total_feeds", 0),
             },
         )
 
@@ -423,6 +470,11 @@ class LoomFabric:
     def ingest_trade(self, trade: dict):
         """Ingest a Freqtrade trade."""
         event = self.processor.from_freqtrade(trade)
+        self._process(event)
+
+    def ingest_pyth_price(self, token: dict):
+        """Ingest a Pyth Network price update."""
+        event = self.processor.from_pyth_price(token)
         self._process(event)
 
     def _process(self, event: MarketEvent):

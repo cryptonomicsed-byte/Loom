@@ -35,6 +35,7 @@ EVENT_TYPES = [
     "whale_entry", "whale_exit", "cluster_form", "crowd_arrive",
     "price_move", "anomaly", "accumulation", "distribution",
     "scout_entry", "amplifier_entry", "leader_entry",
+    "price_update", "threat_intel", "onchain", "debate",
 ]
 
 def tokenize_event(event_type: str, magnitude: float, entity_id: int,

@@ -201,6 +201,11 @@ def background_loader():
         from vantage_puller import puller as vt_puller
         from vantage_wallet_sync import wallet_sync as vt_wallet_sync
         from solana_wallet_scanner import solscan
+        from agents import AgentOrchestrator
+
+        # Initialize agent orchestrator for cross-platform debate fusion
+        global _orchestrator
+        _orchestrator = AgentOrchestrator()
 
         # Initialize LLM-powered brief engine
         global _narrative_brief
@@ -237,10 +242,10 @@ def background_loader():
         # Push detected whales to Vantage watchlist
         vt_watchlist.push_leaderboard(whales)
 
-        # Start Vantage → LOOM enrichment loop
+        # Start Vantage → LOOM enrichment loop (with orchestrator for debate fusion)
         import threading
         threading.Thread(target=vt_puller.enrich_loop,
-                        args=(fabric, whales, 30), daemon=True).start()
+                        args=(fabric, whales, _orchestrator, 30), daemon=True).start()
 
         # Start Vantage ↔ LOOM bidirectional wallet sync
         threading.Thread(target=vt_wallet_sync.sync_loop,

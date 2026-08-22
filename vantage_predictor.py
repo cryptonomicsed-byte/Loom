@@ -24,7 +24,19 @@ from transformer_predictor import get_model, predict_from_events
 # ── Config ────────────────────────────────────────────────────
 
 VANTAGE_URL = "http://2.25.70.156:8001"
-VANTAGE_KEY = os.environ.get("VANTAGE_API_KEY", "")  # Set via .env or export
+VANTAGE_KEY = ""
+
+def _load_key():
+    try:
+        key_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".vantage_key")
+        with open(key_file) as f:
+            return f.read().strip()
+    except Exception:
+        try:
+            with open(os.path.expanduser("~/.vantage_key")) as f:
+                return f.read().strip()
+        except Exception:
+            return os.environ.get("VANTAGE_API_KEY", "")
 COINGECKO_URL = "https://api.coingecko.com/api/v3/simple/price"
 
 # Tracked symbols — maps our entity names to Vantage symbols
@@ -49,7 +61,7 @@ class VantagePredictor:
     def __init__(self, vault_events_callback=None):
         self.model = get_model()
         self.vantage_url = VANTAGE_URL.rstrip("/")
-        self.vantage_key = VANTAGE_KEY
+        self.vantage_key = _load_key()
         self.session = self._build_session()
         self._events_cb = vault_events_callback
         self._last_signals: dict = {}  # {symbol: last_signal}
