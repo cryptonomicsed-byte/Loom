@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 PORT = 8889
 
 # Load galaxy HTML from static file (fresh, no pyc issues)
-GALAXY_PATH = "/data/data/com.termux/files/home/loom/galaxy.html"
+GALAXY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "galaxy.html")
 try:
     with open(GALAXY_PATH) as f:
         GALAXY_HTML = f.read()
@@ -93,6 +93,8 @@ class FastHandler(BaseHTTPRequestHandler):
             self._json(_cached_brief)
         elif path == "/api/whales/galaxy":
             self._json(_cached_galaxy)
+        elif path == "/api/signals/composite":
+            self._json(_cached_composite)
         elif path == "/ws":
             self._ws_upgrade()
         else:
@@ -173,6 +175,11 @@ _cached_galaxy = {
 }
 _ws_clients = []
 
+# Smart-money composite signal cache (filled by background loader)
+_cached_composite = {"signals": [], "updated": 0, "source": "smart_money_composite"}
+_composite_engine = None
+_last_composite_ts = 0.0
+
 
 def broadcast(msg):
     dead = []
@@ -203,11 +210,17 @@ def background_loader():
         from solana_wallet_scanner import solscan
 
         # Initialize LLM-powered brief engine
-        global _narrative_brief
+        global _narrative_brief, _composite_engine
+        try:
+            from engines import SmartMoneyMomentumEngine
+            _composite_engine = SmartMoneyMomentumEngine(whale_engine=whales)
+        except Exception:
+            _composite_engine = None
         _narrative_brief = NarrativeBrief(
             whale_engine=whales,
             trenches_monitor=None,
             omniroute=llm_bridge,
+            composite=_composite_engine,
         )
 
         # Seed whales
@@ -253,7 +266,7 @@ def background_loader():
         # Update caches periodically
         while True:
             _t.sleep(5)
-            global _cached_state, _cached_leaderboard, _cached_brief
+            global _cached_state, _cached_leaderboard, _cached_brief, _cached_composite, _last_composite_ts
             try:
                 _cached_state = fabric.get_state()
                 _cached_leaderboard = whales.get_leaderboard(10)
@@ -263,6 +276,18 @@ def background_loader():
                 if _t.time() - _last_wl_sync > 120:
                     vt_watchlist.push_leaderboard(whales)
                     _last_wl_sync = _t.time()
+                # Refresh composite signals (every ~60s; paced fetches inside)
+                if _composite_engine and _t.time() - _last_composite_ts > 60:
+                    try:
+                        sigs = _composite_engine.get_top_signals(limit=10, force=True)
+                        _cached_composite = {
+                            "signals": sigs,
+                            "updated": _t.time(),
+                            "source": "smart_money_composite",
+                        }
+                        _last_composite_ts = _t.time()
+                    except Exception:
+                        pass
             except Exception:
                 pass
     except Exception as e:
