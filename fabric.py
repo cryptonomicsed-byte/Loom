@@ -47,6 +47,22 @@ class MarketEvent:
         d["_type"] = "market_event"
         return d
 
+def entity_matches(event, wanted: str) -> bool:
+    """P1-06: is this event about the requested entity?
+
+    Loom is symbol-level: an event matches when its entity, its raw symbol,
+    or its entity with a /USD suffix equals the wanted symbol (case-insensitive).
+    The mint is not compared -- Loom does not track mints, and two tokens with
+    the same symbol are indistinguishable here by design.
+    """
+    w = (wanted or "").strip().upper()
+    if not w:
+        return False
+    entity = str(getattr(event, "entity", "") or "").upper()
+    symbol = str(getattr(event, "symbol", "") or "").upper()
+    return entity == w or symbol == w or entity == f"{w}/USD"
+
+
     def to_compact(self):
         """Lightweight version for WebSocket stream"""
         return {

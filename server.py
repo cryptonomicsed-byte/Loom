@@ -18,7 +18,7 @@ from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fabric import fabric
+from fabric import fabric, entity_matches
 from sources import start_ingestion
 from whales import whales
 from twitter_mapper import twitter_mapper
@@ -574,18 +574,35 @@ class LoomServer(BaseHTTPRequestHandler):
         elif path == "/api/decide":
             params = parse_qs(urlparse(self.path).query)
             symbol = params.get("symbol", ["UNKNOWN"])[0]
-            events = []
-            for e in list(fabric.causal.recent)[-30:]:
-                events.append({
-                    "type": e.event_type,
-                    "magnitude": e.magnitude,
-                    "entity": e.entity,
-                    "wallet_count": 0,
-                    "confidence": e.confidence,
-                    "metadata": {},
-                })
-            orch = get_orchestrator()
-            result = orch.decide(symbol, events)
+            mint = params.get("mint", [""])[0]
+            # P1-06: scope the decision to this entity. Loom is symbol-level,
+            # so mint is accepted for the record but does not further
+            # disambiguate; two tokens are told apart by symbol. Without a
+            # match the endpoint answers scoped=false instead of a generic
+            # consensus, so Vantage never applies an unrelated decision.
+            matches = [e for e in fabric.causal.recent if entity_matches(e, symbol)]
+            if matches:
+                events = []
+                for e in matches[-30:]:
+                    events.append({
+                        "type": e.event_type,
+                        "magnitude": e.magnitude,
+                        "entity": e.entity,
+                        "wallet_count": 0,
+                        "confidence": e.confidence,
+                        "metadata": {},
+                    })
+                orch = get_orchestrator()
+                result = orch.decide(symbol, events)
+                result["scoped"] = True
+                result["mint"] = mint
+            else:
+                result = {
+                    "symbol": symbol, "mint": mint, "scoped": False,
+                    "consensus": {"direction": "WAIT", "conviction": 0,
+                                  "debate": False, "source": "loom-multi-agent-v2",
+                                  "cross_platform": False},
+                }
             self._serve_json(result)
 
         elif path == "/api/agents/stats":
