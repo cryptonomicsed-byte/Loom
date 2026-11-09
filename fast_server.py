@@ -10,7 +10,7 @@ import threading
 import os
 import sys
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -88,7 +88,13 @@ class FastHandler(BaseHTTPRequestHandler):
         elif path == "/api/whales/leaderboard":
             self._json(_cached_leaderboard)
         elif path == "/api/decide":
-            self._json({"consensus": {"direction": "WAIT", "conviction": 0, "debate": False}})
+            params = parse_qs(urlparse(self.path).query)
+            symbol = params.get("symbol", ["UNKNOWN"])[0]
+            mint = params.get("mint", [""])[0]
+            # P1-06: this server has no debate engine; answer scoped=false so
+            # Vantage fail-opens rather than applying a fabricated consensus.
+            self._json({"symbol": symbol, "mint": mint, "scoped": False,
+                        "consensus": {"direction": "WAIT", "conviction": 0, "debate": False}})
         elif path == "/api/brief":
             self._json(_cached_brief)
         elif path == "/api/whales/galaxy":
