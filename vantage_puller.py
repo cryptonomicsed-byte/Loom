@@ -19,7 +19,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-VANTAGE_URL = "http://2.25.70.156:8001"
+# P1-05: was hardcoded to 2.25.70.156 (a retired host).
+VANTAGE_URL = os.environ.get("VANTAGE_URL", "http://127.0.0.1:8001")
 KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".vantage_key")
 
 
@@ -414,32 +415,20 @@ class VantagePuller:
     # ── Cross-platform debate fusion ─────────────────────────
 
     def push_consensus_to_vantage(self, orchestrator_result: dict) -> bool:
-        """Push Loom's agent consensus back to Vantage for cross-platform debate."""
+        """Push Loom's agent consensus back to Vantage (P1-05: intel door,
+        system-tool auth, signal_record/1, conviction 0..1 capped 0.69)."""
         try:
+            import vantage_record as vr
             symbol = orchestrator_result.get("symbol", "?")
             consensus = orchestrator_result.get("consensus", {})
-            body = json.dumps({
-                "symbol": symbol,
-                "direction": consensus.get("direction", "WAIT"),
-                "conviction": consensus.get("conviction", 0),
-                "source": "loom-multi-agent-v2",
-                "debate": consensus.get("debate", False),
-                "cross_platform": consensus.get("cross_platform", False),
-                "external_vote_count": orchestrator_result.get("external_vote_count", 0),
-                "timestamp": time.time(),
-            }).encode()
-
-            req = urllib.request.Request(
-                f"{self.base}/api/trading/signals/ingest",
-                data=body,
-                headers={
-                    **self._headers(),
-                    "Content-Type": "application/json",
-                },
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                return True
+            rec = vr.build(
+                symbol, consensus.get("direction", "WAIT"), consensus.get("conviction", 0),
+                "loom-multi-agent-v2", mint=str(orchestrator_result.get("mint") or ""),
+                evidence={"debate": bool(consensus.get("debate", False)),
+                          "cross_platform": bool(consensus.get("cross_platform", False)),
+                          "external_vote_count": int(orchestrator_result.get("external_vote_count", 0) or 0)},
+                version="loom-puller/2.0")
+            return bool(vr.post(rec, timeout=8).get("published"))
         except Exception:
             return False
 

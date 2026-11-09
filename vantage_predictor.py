@@ -23,7 +23,8 @@ from transformer_predictor import get_model, predict_from_events
 
 # ── Config ────────────────────────────────────────────────────
 
-VANTAGE_URL = "http://2.25.70.156:8001"
+# P1-05: was hardcoded to 2.25.70.156 (a retired host).
+VANTAGE_URL = os.environ.get("VANTAGE_URL", "http://127.0.0.1:8001")
 VANTAGE_KEY = ""
 
 def _load_key():
@@ -187,25 +188,22 @@ class VantagePredictor:
             if now - self._last_signals[symbol] < self._signal_cooldown:
                 return {"published": False, "reason": "cooldown"}
 
-        try:
-            body = json.dumps(signal).encode()
-            url = f"{self.vantage_url}/api/trading/signals/ingest"
-
-            req = urllib.request.Request(url, data=body, method="POST")
-            req.add_header("Content-Type", "application/json")
-            if self.vantage_key:
-                req.add_header("X-Agent-Key", self.vantage_key)
-            req.add_header("User-Agent", "LOOM-VantagePredictor/1.0")
-
-            with self.session.open(req, timeout=5) as resp:
-                result = json.loads(resp.read())
-                self._last_signals[symbol] = now
-                print(f"  [vantage] published {symbol} {signal['direction']} conv={signal['conviction']:.2f}")
-                return {"published": True, "result": result}
-
-        except Exception as e:
-            print(f"  [vantage] publish failed for {symbol}: {e}")
-            return {"published": False, "reason": str(e)}
+        # P1-05: intel door, system-tool auth, signal_record/1, conviction 0..1
+        # capped 0.69. X-Agent-Key is for pulls only.
+        import vantage_record as vr
+        rec = vr.build(symbol, signal.get("direction", ""), signal.get("conviction", 0),
+                       "loom-whale-transformer", mint=str(signal.get("mint") or ""),
+                       detail=f"horizon {signal.get('horizon', '')}",
+                       evidence={k: v for k, v in (signal.get("metadata") or {}).items()
+                                 if isinstance(v, (int, float))},
+                       version="loom-predictor/1.0")
+        out = vr.post(rec, timeout=5)
+        if out.get("published"):
+            self._last_signals[symbol] = now
+            print(f"  [vantage] published {symbol} {rec['direction']} conv={rec['conviction']:.2f}")
+            return out
+        print(f"  [vantage] publish failed for {symbol}: {out.get('reason') or out.get('status')}")
+        return out
 
     def run_cycle(self, symbols: list = None):
         """Run one prediction + publish cycle for all tracked symbols."""
