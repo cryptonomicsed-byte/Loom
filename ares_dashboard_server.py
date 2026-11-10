@@ -10,7 +10,7 @@ import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
-VPS = "root@2.25.70.156"
+VPS = "root@127.0.0.1"
 SSH_KEY = os.path.expanduser("~/.ssh/id_ed25519")
 SSH = ["ssh", "-i", SSH_KEY, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5", VPS]
 PORT = 8880

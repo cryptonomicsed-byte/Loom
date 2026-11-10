@@ -23,7 +23,7 @@ from transformer_predictor import get_model, predict_from_events
 
 # ── Config ────────────────────────────────────────────────────
 
-VANTAGE_URL = "http://2.25.70.156:8001"
+VANTAGE_URL = "http://127.0.0.1:8001"
 VANTAGE_KEY = os.environ.get("VANTAGE_API_KEY", "")  # Set via .env or export
 COINGECKO_URL = "https://api.coingecko.com/api/v3/simple/price"
 

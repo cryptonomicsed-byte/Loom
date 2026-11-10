@@ -13,7 +13,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fabric import fabric
 
-VPS = "root@2.25.70.156"
+VPS = "root@127.0.0.1"
 SSH_KEY = "/data/data/com.termux/files/home/.ssh/id_ed25519"
 SSH = ["ssh", "-i", SSH_KEY, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5", VPS]
 
