@@ -23,8 +23,8 @@ import urllib.request
 import threading
 import os
 
-VANTAGE_URL = "http://2.25.70.156:8001"
-AGENT_KEY = os.environ.get("VANTAGE_AGENT_KEY", "loom-whale-tracker")
+VANTAGE_URL = "http://127.0.0.1:8001"
+AGENT_KEY = os.environ.get("VANTAGE_AGENT_KEY", open("/opt/ares/Loom/.vantage_key").read().strip() if __import__("os").path.exists("/opt/ares/Loom/.vantage_key") else "")
 
 
 class VantageWatchlist:

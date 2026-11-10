@@ -337,6 +337,46 @@ class EventProcessor:
             },
         )
 
+    def from_composite(self, sig: dict) -> MarketEvent:
+        """Convert a smart-money composite signal to MarketEvent.
+
+        Emits event_type 'smart_money_momentum' with the composite
+        conviction as confidence, quality/honeypot flags in metadata.
+        """
+        conv = float(sig.get("conviction", 0.0) or 0.0)
+        decision = sig.get("decision", "WAIT")
+        comp = sig.get("components") or {}
+        quality = sig.get("quality") or {}
+        direction = sig.get("direction", "WAIT")
+        tags = ["composite"]
+        if decision == "BUY":
+            tags.append("buy_signal")
+        if not quality.get("passed", True):
+            tags.append("quality_reject")
+        return MarketEvent(
+            event_id=self._make_id(),
+            event_type="smart_money_momentum",
+            entity=f"{sig.get('symbol', '?')}/USD",
+            symbol=sig.get("symbol", "?"),
+            magnitude=min(1.0, max(0.0, conv)),
+            confidence=min(1.0, max(0.0, conv)),
+            timestamp=time.time(),
+            source="smart_money_composite",
+            temporal_tags=tags,
+            anomaly_score=0.0,
+            metadata={
+                "decision": decision,
+                "direction": direction,
+                "mint": sig.get("mint"),
+                "reasons": sig.get("reasons", []),
+                "components": comp,
+                "quality": {k: v for k, v in quality.items()
+                            if k != "reasons"},
+                "honeypot_flags": quality.get("honeypot_flags", []),
+                "bundler_risk": quality.get("bundler_risk", []),
+            },
+        )
+
     def from_freqtrade(self, trade: dict) -> MarketEvent:
         """Convert Freqtrade trade to MarketEvent."""
         pnl = trade.get("close_profit", 0) or 0
@@ -423,6 +463,11 @@ class LoomFabric:
     def ingest_trade(self, trade: dict):
         """Ingest a Freqtrade trade."""
         event = self.processor.from_freqtrade(trade)
+        self._process(event)
+
+    def ingest_composite(self, sig: dict):
+        """Ingest a smart-money composite signal (paper-only)."""
+        event = self.processor.from_composite(sig)
         self._process(event)
 
     def _process(self, event: MarketEvent):

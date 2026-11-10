@@ -10,8 +10,8 @@ import urllib.request
 import os
 import threading
 
-VANTAGE_URL = "http://2.25.70.156:8001"
-KEY_FILE = "/data/data/com.termux/files/home/loom/.vantage_key"
+VANTAGE_URL = "http://127.0.0.1:8001"
+KEY_FILE = "/opt/ares/Loom/.vantage_key"
 
 
 class VantageWalletSync:
@@ -36,18 +36,22 @@ class VantageWalletSync:
         }
 
     def pull_all_wallets(self) -> list:
-        """Pull every wallet from Vantage watchlist."""
-        try:
-            req = urllib.request.Request(
-                f"{VANTAGE_URL}/api/intel/watchlist",
-                headers=self._headers(),
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read())
-                return data.get("wallets", data if isinstance(data, list) else [])
-        except Exception as e:
-            print(f"  [wallet-sync] pull failed: {e}")
-            return []
+        """Pull every wallet from Vantage watchlist (with retry/backoff)."""
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(
+                    f"{VANTAGE_URL}/api/intel/watchlist",
+                    headers=self._headers(),
+                )
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = json.loads(resp.read())
+                    return data.get("wallets", data if isinstance(data, list) else [])
+            except Exception as e:
+                wait = 2 ** attempt
+                print(f"  [wallet-sync] pull failed (attempt {attempt+1}/3): {e}; retrying in {wait}s")
+                if attempt < 2:
+                    time.sleep(wait)
+        return []
 
     def sync_to_loom(self, whales_engine, twitter_mapper=None, solana_sources=None) -> int:
         """

@@ -9,7 +9,7 @@ import time
 import urllib.request
 import threading
 
-VANTAGE_URL = "http://2.25.70.156:8001"
+VANTAGE_URL = "http://127.0.0.1:8001"
 
 
 class VantagePuller:
