@@ -23,7 +23,8 @@ import urllib.request
 import threading
 import os
 
-VANTAGE_URL = "http://2.25.70.156:8001"
+# was hardcoded to 2.25.70.156 (retired host)
+VANTAGE_URL = os.environ.get("VANTAGE_URL", "http://127.0.0.1:8001")
 def _load_key():
     try:
         key_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".vantage_key")

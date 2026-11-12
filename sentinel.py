@@ -18,12 +18,20 @@ PORT = 8885
 
 # Services we monitor
 SERVICES = {
-    "loom_fast": {"port": 8889, "name": "LOOM Fast Server", "type": "local"},
-    "ares_dashboard": {"port": 8880, "name": "Ares Dashboard", "type": "local"},
-    "julia_engine": {"host": "2.25.70.156", "port": 8895, "name": "Julia Graph Engine", "type": "vps"},
-    "freqtrade": {"host": "2.25.70.156", "port": 9870, "name": "Freqtrade Trading", "type": "vps"},
-    "vantage": {"host": "2.25.70.156", "port": 8001, "name": "Vantage API", "type": "vps"},
+    # All monitored services run on this host now. The originals targeted the
+    # retired 2.25.70.156 over ssh. "health" is the path that answers 200.
+    "loom_fast": {"port": 8889, "name": "LOOM Fast Server", "type": "local", "health": "/api/health"},
+    "ares_dashboard": {"port": 8880, "name": "Ares Dashboard", "type": "local", "health": "/api/health"},
+    "julia_engine": {"port": 8895, "name": "Julia Graph Engine", "type": "local", "health": "/api/health"},
+    "freqtrade": {"port": 9870, "name": "Freqtrade Trading", "type": "local", "health": "/api/v1/ping"},
+    "vantage": {"port": 8001, "name": "Vantage API", "type": "local", "health": "/health"},
 }
+
+# systemd units the control endpoints may restart (was: pkill + Termux paths / ssh)
+RESTART_UNITS = {"loom": "ares-loom.service", "julia": "ares-loom-julia.service"}
+JULIA_STATE_FILE = os.path.join(os.environ.get("LOOM_JULIA_STATE_DIR",
+                                os.path.join(os.path.dirname(os.path.abspath(__file__)), "state")),
+                                "julia_state.json")
 
 DAEMON_HEALTH = {}
 
@@ -35,10 +43,14 @@ def check_service(svc):
     try:
         if svc["type"] == "local":
             import urllib.request
-            url = f"http://localhost:{svc['port']}/api/health"
+            url = f"http://127.0.0.1:{svc['port']}{svc.get('health', '/api/health')}"
             req = urllib.request.Request(url, headers={"User-Agent": "AresSentinel/1.0"})
             with urllib.request.urlopen(req, timeout=3) as resp:
-                data = json.loads(resp.read())
+                raw = resp.read()
+                try:
+                    data = json.loads(raw)
+                except ValueError:
+                    data = {"raw": raw[:200].decode(errors="replace")}
                 DAEMON_HEALTH[key] = {"status": "online", "data": data, "since": time.time()}
                 return True
         else:
@@ -183,11 +195,10 @@ class SentinelHandler(BaseHTTPRequestHandler):
         elif path == "/api/control/health":
             nodes = 0
             try:
-                r = subprocess.run(["ssh", "-o", "ConnectTimeout=2", "2.25.70.156",
-                    "cat /opt/loom/julia_state.json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get(\"node_count\",0))'"],
-                    capture_output=True, text=True, timeout=5)
-                nodes = int(r.stdout.strip() or 0)
-            except: pass
+                with open(JULIA_STATE_FILE) as f:
+                    nodes = int(json.load(f).get("node_count", 0))
+            except Exception:
+                pass
 
             self._json({
                 "services": [
@@ -202,16 +213,12 @@ class SentinelHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/control/loom/restart":
             log("Restarting LOOM...")
-            subprocess.Popen(["pkill", "-f", "fast_server"], stderr=subprocess.DEVNULL)
-            time.sleep(1)
-            subprocess.Popen(["python3", "/data/data/com.termux/files/home/loom/fast_server.py"],
-                           cwd="/data/data/com.termux/files/home/loom")
+            subprocess.run(["systemctl", "restart", RESTART_UNITS["loom"]], timeout=30)
             self._json({"action": "loom_restart", "status": "ok"})
 
         elif path == "/api/control/julia/restart":
             log("Restarting Julia engine...")
-            subprocess.run(["ssh", "2.25.70.156", "pkill -f julia_daemon; sleep 1; cd /opt/loom && /usr/local/bin/julia julia_daemon.jl > daemon.log 2>&1 &"],
-                         timeout=10)
+            subprocess.run(["systemctl", "restart", RESTART_UNITS["julia"]], timeout=30)
             self._json({"action": "julia_restart", "status": "ok"})
 
         elif path == "/api/control/loom/reload":
@@ -247,4 +254,5 @@ class SentinelHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     log("Ares Sentinel starting...")
     print(f"\n  ◈  Sentinel — http://localhost:{PORT}")
-    HTTPServer(("0.0.0.0", PORT), SentinelHandler).serve_forever()
+    # loopback only: the /api/control/* endpoints restart services without auth
+    HTTPServer((os.environ.get("SENTINEL_BIND", "127.0.0.1"), PORT), SentinelHandler).serve_forever()

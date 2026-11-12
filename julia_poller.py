@@ -4,12 +4,14 @@ Julia Poller — Bridges VPS Julia engine alerts into LOOM.
 Polls :8895 every 15s. Injects anomalies into the fabric event stream.
 """
 
+import os
 import json
 import time
 import threading
 import urllib.request
 
-JULIA_API = "http://2.25.70.156:8895"
+# was hardcoded to the retired 2.25.70.156
+JULIA_API = os.environ.get("LOOM_JULIA_API", "http://127.0.0.1:8895")
 
 
 class JuliaPoller:
@@ -67,19 +69,32 @@ class JuliaPoller:
             return {"nodes": [], "links": []}
 
     def poll_loop(self, fabric=None, whales=None, interval=15):
-        """Continuous polling loop — injects alerts into LOOM fabric."""
+        """Continuous polling loop — injects alerts into LOOM fabric.
+
+        Fixed: the original re-injected EVERY alert on EVERY poll (one alert →
+        an event every 15s forever), used an empty "token" as the entity for
+        centrality alerts, and would forward simulated alerts as real signals.
+        """
+        seen = set()
         while True:
             try:
                 alerts = self.fetch_alerts()
                 state = self.fetch_state()
 
-                # Inject Julia anomalies as fabric events
+                # Inject Julia anomalies as fabric events — once each, live only
                 if fabric and alerts:
                     for alert in alerts:
+                        if alert.get("source") == "simulated":
+                            continue
+                        entity = alert.get("token") or alert.get("address") or "?"
+                        key = (alert.get("type"), entity, alert.get("timestamp"))
+                        if key in seen:
+                            continue
+                        seen.add(key)
                         fabric.ingest(
                             event_type="julia_anomaly",
-                            entity=alert.get("token", alert.get("address", "?")),
-                            magnitude=alert.get("tagged_wallets", 1) / 10.0,
+                            entity=entity,
+                            magnitude=(alert.get("tagged_wallets") or 1) / 10.0,
                             source="julia_engine",
                             metadata={
                                 "alert_type": alert.get("type"),
@@ -87,6 +102,8 @@ class JuliaPoller:
                                 "message": alert.get("message"),
                             },
                         )
+                    if len(seen) > 5000:
+                        seen = set(list(seen)[-1000:])
 
             except Exception as e:
                 print(f"  [julia] poll error: {e}")

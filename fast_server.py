@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 PORT = 8889
 
 # Load galaxy HTML from static file (fresh, no pyc issues)
-GALAXY_PATH = "/data/data/com.termux/files/home/loom/galaxy.html"
+GALAXY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "galaxy.html")
 try:
     with open(GALAXY_PATH) as f:
         GALAXY_HTML = f.read()
@@ -98,7 +98,9 @@ class FastHandler(BaseHTTPRequestHandler):
         elif path == "/api/brief":
             self._json(_cached_brief)
         elif path == "/api/whales/galaxy":
-            self._json(_cached_galaxy)
+            self._json(get_galaxy())
+        elif path == "/api/signals/composite":
+            self._json(_cached_composite)
         elif path == "/ws":
             self._ws_upgrade()
         else:
@@ -161,23 +163,87 @@ _cached_leaderboard = []
 _cached_brief = {}
 _narrative_brief = None
 _last_wl_sync = 0.0
-_cached_galaxy = {
-    "nodes": [
-        {"id": "loom:center", "name": "LOOM", "val": 20, "color": "#ffffff", "kind": "agent"},
-        {"id": "whale:1", "name": "Whale Alpha", "val": 8, "color": "#f43f5e", "kind": "whale", "tier": 1},
-        {"id": "whale:2", "name": "Whale Beta", "val": 6, "color": "#f59e0b", "kind": "whale", "tier": 2},
-        {"id": "token:bonk", "name": "BONK", "val": 4, "color": "#10b981", "kind": "token"},
-        {"id": "token:popcat", "name": "POPCAT", "val": 3, "color": "#10b981", "kind": "token"},
-    ],
-    "links": [
-        {"source": "loom:center", "target": "whale:1", "color": "#f43f5e", "width": 0.8},
-        {"source": "loom:center", "target": "whale:2", "color": "#f59e0b", "width": 0.5},
-        {"source": "whale:1", "target": "token:bonk", "color": "#10b981", "width": 0.4},
-        {"source": "whale:2", "target": "token:popcat", "color": "#10b981", "width": 0.3},
-        {"source": "token:bonk", "target": "token:popcat", "color": "#a855f7", "width": 0.2},
-    ],
-}
+_VANTAGE_DB = "/opt/ares/Vantage/data/vantage.db"
+_galaxy_cache = {"payload": None, "ts": 0.0}
+GALAXY_TTL = 60.0
+
+
+def build_galaxy(limit_whales: int = 12):
+    """Live galaxy from Vantage: funded wallets and the tokens they hold."""
+    import sqlite3
+    nodes = [{"id": "loom:center", "name": "LOOM", "val": 20, "color": "#ffffff", "kind": "agent"}]
+    links = []
+    try:
+        con = sqlite3.connect("file:" + _VANTAGE_DB + "?mode=ro", uri=True, timeout=5)
+        con.row_factory = sqlite3.Row
+        whales = con.execute(
+            """SELECT id, address, label, balance_usd
+                 FROM tracked_wallets
+                WHERE chain='solana' AND archived_at IS NULL AND balance_usd > 0
+                ORDER BY balance_usd DESC LIMIT ?""",
+            (limit_whales,),
+        ).fetchall()
+
+        whale_ids = {}
+        for rank, w in enumerate(whales, start=1):
+            addr = w["address"] or ""
+            nid = "whale:" + addr[:8]
+            whale_ids[w["id"]] = nid
+            usd = float(w["balance_usd"] or 0)
+            nodes.append({
+                "id": nid,
+                "name": (w["label"] or addr[:6])[:18],
+                "val": max(2.0, min(14.0, 2.0 + usd * 2)),
+                "color": "#f43f5e" if rank <= 3 else "#f59e0b" if rank <= 8 else "#64748b",
+                "kind": "whale",
+                "tier": 1 if rank <= 3 else 2 if rank <= 8 else 3,
+            })
+            links.append({"source": "loom:center", "target": nid,
+                          "color": "#f43f5e" if rank <= 3 else "#f59e0b", "width": 0.8 if rank <= 3 else 0.4})
+
+        holdings = con.execute(
+            """SELECT wallet_id, token, token_address, balance, value_usd
+                 FROM trading_balances
+                WHERE balance > 0
+                ORDER BY COALESCE(value_usd, 0) DESC LIMIT 60"""
+        ).fetchall()
+
+        token_ids = {}
+        for h in holdings:
+            wid = whale_ids.get(h["wallet_id"])
+            if not wid:
+                continue
+            label = (h["token"] or (h["token_address"] or "")[:6] or "TOKEN")[:10]
+            key = (h["token_address"] or label)
+            tid = token_ids.get(key)
+            if tid is None:
+                tid = "token:" + key[:8]
+                token_ids[key] = tid
+                nodes.append({"id": tid, "name": label, "val": 3,
+                              "color": "#10b981", "kind": "token"})
+            links.append({"source": wid, "target": tid, "color": "#10b981", "width": 0.3})
+        con.close()
+    except Exception as e:
+        print(f"galaxy build error: {e}", flush=True)
+
+    return {"nodes": nodes, "links": links,
+            "meta": {"whales": len(nodes) - 1, "live": True}}
+
+
+def get_galaxy():
+    now = time.time()
+    if _galaxy_cache["payload"] is None or now - _galaxy_cache["ts"] > GALAXY_TTL:
+        _galaxy_cache["payload"] = build_galaxy()
+        _galaxy_cache["ts"] = now
+    return _galaxy_cache["payload"]
+
+
 _ws_clients = []
+
+# Smart-money composite signal cache (filled by background loader)
+_cached_composite = {"signals": [], "updated": 0, "source": "smart_money_composite"}
+_composite_engine = None
+_last_composite_ts = 0.0
 
 
 def broadcast(msg):
@@ -214,11 +280,20 @@ def background_loader():
         _orchestrator = AgentOrchestrator()
 
         # Initialize LLM-powered brief engine
-        global _narrative_brief
+        global _narrative_brief, _composite_engine
+        try:
+            from engines import SmartMoneyMomentumEngine
+            _composite_engine = SmartMoneyMomentumEngine(whale_engine=whales)
+            print(f"  [composite] engine initialized: {_composite_engine}")
+        except Exception as _ce:
+            print(f"  [composite] engine init FAILED: {_ce}")
+            import traceback; traceback.print_exc()
+            _composite_engine = None
         _narrative_brief = NarrativeBrief(
             whale_engine=whales,
             trenches_monitor=None,
             omniroute=llm_bridge,
+            composite=_composite_engine,
         )
 
         # Seed whales
@@ -264,7 +339,7 @@ def background_loader():
         # Update caches periodically
         while True:
             _t.sleep(5)
-            global _cached_state, _cached_leaderboard, _cached_brief
+            global _cached_state, _cached_leaderboard, _cached_brief, _cached_composite, _last_composite_ts, _last_wl_sync
             try:
                 _cached_state = fabric.get_state()
                 _cached_leaderboard = whales.get_leaderboard(10)
@@ -274,6 +349,20 @@ def background_loader():
                 if _t.time() - _last_wl_sync > 120:
                     vt_watchlist.push_leaderboard(whales)
                     _last_wl_sync = _t.time()
+                # Refresh composite signals (every ~60s; paced fetches inside)
+                if _composite_engine and _t.time() - _last_composite_ts > 60:
+                    try:
+                        sigs = _composite_engine.get_top_signals(limit=10, force=True)
+                        _cached_composite = {
+                            "signals": sigs,
+                            "updated": _t.time(),
+                            "source": "smart_money_composite",
+                        }
+                        _last_composite_ts = _t.time()
+                        if sigs:
+                            print(f"  [composite] {len(sigs)} signals refreshed (top: {sigs[0].get('symbol','?')} conv={sigs[0].get('conviction',0):.3f})")
+                    except Exception as _ce:
+                        print(f"  [composite] refresh error: {_ce}")
             except Exception:
                 pass
     except Exception as e:

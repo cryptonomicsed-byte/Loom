@@ -442,7 +442,7 @@ class NarrativeBrief:
                  contagion_engine=None, counterfactual_engine=None,
                  precursor_engine=None, rhythm_engine=None,
                  whale_engine=None, trenches_monitor=None,
-                 omniroute=None):
+                 omniroute=None, composite=None):
         self.narrative = narrative_engine
         self.flow = flow_engine
         self.contagion = contagion_engine
@@ -452,6 +452,7 @@ class NarrativeBrief:
         self.whales = whale_engine
         self.trenches = trenches_monitor
         self.omniroute = omniroute  # OmniRouteBridge for LLM synthesis
+        self.composite = composite  # SmartMoneyMomentumEngine (optional)
 
     def generate(self) -> str:
         """Generate the full intel brief. Uses LLM if OmniRoute is available."""
@@ -490,6 +491,25 @@ class NarrativeBrief:
             rhythm_alerts = self.rhythm.get_active_alerts()
             for a in rhythm_alerts[:3]:
                 lines.append(f"  ⚠️  RHYTHM BREAK: {a['message']}")
+
+        # ── Signal Composites ──
+        lines.append("\n📡 SIGNAL COMPOSITES")
+        if self.composite:
+            try:
+                top = self.composite.get_top_signals(limit=3)
+                for s in top:
+                    comp = s.get("components", {})
+                    lines.append(
+                        f"  {s['symbol']} — {s['decision']} conv={s['conviction']:.2f} "
+                        f"(q={comp.get('quality', 0):.2f} mom={comp.get('momentum', 0):.2f} "
+                        f"w={comp.get('whale', 0):.2f})"
+                    )
+                if not top:
+                    lines.append("  No composite signals (no market data yet).")
+            except Exception as e:
+                lines.append(f"  Composite engine error: {e}")
+        else:
+            lines.append("  (not wired)")
 
         # ── Liquidity ──
         lines.append("\n💧 LIQUIDITY FLOW")
@@ -567,3 +587,72 @@ contagion_engine = ContagionEngine()
 counterfactual_engine = CounterfactualEngine()
 precursor_engine = PrecursorEngine()
 rhythm_engine = RhythmAlertEngine()
+
+
+# ═══════════════════════════════════════════════════════════════
+# 7. SMART-MONEY MOMENTUM COMPOSITE (signal-strategist panel)
+# ═══════════════════════════════════════════════════════════════
+
+# Default watch universe: whale-engine tokens (whale_seeds.py) + SOL + JUP.
+# (symbol, mint) — used when no explicit universe is supplied.
+DEFAULT_COMPOSITE_UNIVERSE = [
+    ("BONK", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"),
+    ("WIF", "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm"),
+    ("POPCAT", "7GCihgDB8eEaJnbNn6hPzJkHZPXu4GbRFrJMNvQkpump"),
+    ("MEW", "MEW1gQWJ3nEXg2qgERiKu7QjMr56KV1fvLcWqX3ypump"),
+    ("MYRO", "HhJpBhRRn4g56VsyLuT8DL5Bv31HkXqsrahTTUCZeZg4"),
+    ("SAMO", "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"),
+    ("TATE", "CuGJf6cfDfMh4UxVgNJ5KFQ6v8Wv3qrqop6cFKsGpump"),
+    ("NEIL", "cvkarf1CtN3tbLRk961vsaEf4T8QbnihDkCHa93pump"),
+    ("BABYANSEM", "AnseMCapB9KiDqRXbGsosvTmeGEMyUAKCpump"),
+    ("BLUB", "3ne4mWqdYuNiuYF9QS2KLLLVwDwXKPWGxWvYUcpump"),
+    ("SOL", "So11111111111111111111111111111111111111112"),
+    ("JUP", "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"),
+]
+
+
+class SmartMoneyMomentumEngine:
+    """Fuses whale conviction, momentum and market quality into a ranked
+    signal list. Wired into the NarrativeBrief so the intel feed surfaces
+    composite signals alongside whale/liquidity/contagion sections.
+
+    Imports ohlcv_feed/signal_composites lazily so this module loads even
+    when network or dependencies are unavailable (server safety).
+    """
+
+    def __init__(self, whale_engine=None, universe: Optional[list] = None,
+                 ttl_seconds: int = 120):
+        from signal_composites import SmartMoneyComposite
+        self.composite = SmartMoneyComposite(whale_engine=whale_engine)
+        self.universe = universe if universe is not None else DEFAULT_COMPOSITE_UNIVERSE
+        self.ttl = ttl_seconds
+        self._cache = {"ts": 0.0, "signals": []}
+
+    def refresh(self):
+        """Score the universe against live market data (paced, cached)."""
+        from ohlcv_feed import get_token_market_data
+        mds = []
+        for symbol, mint in self.universe:
+            try:
+                md = get_token_market_data(mint, days=3)
+                if md.get("ohlcv") is not None or md.get("pairs"):
+                    mds.append(md)
+            except Exception:
+                continue
+        self._cache = {"ts": time.time(), "signals": self.composite.rank(mds)}
+
+    def get_top_signals(self, limit: int = 5, force: bool = False) -> list:
+        """Ranked composite signals, refreshed at most every ttl seconds."""
+        if force or (time.time() - self._cache["ts"]) > self.ttl:
+            try:
+                self.refresh()
+            except Exception:
+                pass
+        return self._cache["signals"][:limit]
+
+    def clear_cache(self):
+        self._cache = {"ts": 0.0, "signals": []}
+
+
+# Global composite engine (whale engine attached lazily by servers)
+composite_engine = SmartMoneyMomentumEngine()
